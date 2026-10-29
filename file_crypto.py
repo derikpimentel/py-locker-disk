@@ -67,15 +67,22 @@ def _publicar_sem_sobrescrever(
 
 def _preparar_caminhos(origem, destino):
     origem = Path(origem).resolve(strict=True)
-    destino = Path(destino).resolve(strict=False)
 
     if not origem.is_file():
         raise ValueError("A origem precisa ser um arquivo.")
 
-    if origem == destino:
-        raise ValueError("Origem e destino não podem ser iguais.")
+    destino_informado = Path(destino)
+    destino = (
+        destino_informado.parent.resolve(strict=False)
+        / destino_informado.name
+    )
 
-    if destino.exists():
+    if origem == destino:
+        raise ValueError(
+            "Origem e destino não podem ser iguais."
+        )
+
+    if destino.is_symlink() or destino.exists():
         raise FileExistsError(
             f"O destino já existe: {destino}"
         )
