@@ -7,35 +7,43 @@ from file_crypto import criptografar_arquivo, descriptografar_arquivo
 EXTENSAO_CIFRADA = ".pld"
 
 
+def _tratar_erro_varredura(erro):
+    raise erro
+
+
 def _validar_pastas(origem, destino):
     origem = Path(origem).resolve(strict=True)
     destino = Path(destino).resolve(strict=False)
 
+    if origem == Path(origem.anchor):
+        raise ValueError(
+            "A origem não pode ser a raiz de uma unidade."
+        )
+
+    if destino == Path(destino.anchor):
+        raise ValueError(
+            "O destino não pode ser a raiz de uma unidade."
+        )
+
     if not origem.is_dir():
         raise ValueError("A origem precisa ser uma pasta.")
 
-    if origem == destino:
-        raise ValueError("Origem e destino não podem ser iguais.")
+    # Impede que origem e destino sejam iguais ou que uma
+    # pasta fique dentro da outra.
+    if destino == origem:
+        raise ValueError(
+            "Origem e destino não podem ser iguais."
+        )
 
-    # Impede que uma pasta fique dentro da outra.
-    # Isso evita processar os próprios arquivos gerados.
-    try:
-        destino.relative_to(origem)
+    if destino.is_relative_to(origem):
         raise ValueError(
             "A pasta de destino não pode ficar dentro da origem."
         )
-    except ValueError as erro:
-        if str(erro).startswith("A pasta de destino"):
-            raise
 
-    try:
-        origem.relative_to(destino)
+    if origem.is_relative_to(destino):
         raise ValueError(
             "A pasta de origem não pode ficar dentro do destino."
         )
-    except ValueError as erro:
-        if str(erro).startswith("A pasta de origem"):
-            raise
 
     return origem, destino
 
@@ -48,7 +56,9 @@ def inventariar_pasta(origem, destino, operacao):
     inventario = []
 
     for pasta_atual, pastas, arquivos in os.walk(
-        origem, followlinks=False
+        origem,
+        followlinks=False,
+        onerror=_tratar_erro_varredura,
     ):
         pasta_atual = Path(pasta_atual)
 
@@ -149,6 +159,10 @@ def processar_pasta(origem, destino, senha, operacao):
 
             resultado["status"] = "sucesso"
             resultado["mensagem"] = "Processamento concluído."
+
+        except FileExistsError as erro:
+            resultado["status"] = "conflito"
+            resultado["mensagem"] = str(erro)
 
         except Exception as erro:
             resultado["status"] = "erro"

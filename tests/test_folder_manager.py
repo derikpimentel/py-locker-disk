@@ -98,3 +98,99 @@ def test_rejeita_operacao_desconhecida(tmp_path):
 
     with pytest.raises(ValueError):
         inventariar_pasta(origem, destino, "excluir")
+
+
+def test_falha_na_varredura_e_reportada(tmp_path, monkeypatch):
+    import folder_manager
+
+    origem = tmp_path / "origem"
+    destino = tmp_path / "destino"
+    origem.mkdir()
+
+    def walk_com_erro(*args, **kwargs):
+        callback = kwargs.get("onerror")
+
+        if callback is None:
+            pytest.fail(
+                "A varredura precisa definir um tratamento de erros."
+            )
+
+        erro = PermissionError("Acesso negado à subpasta.")
+        callback(erro)
+
+        return iter(())
+
+    monkeypatch.setattr(folder_manager.os, "walk", walk_com_erro)
+
+    with pytest.raises(PermissionError, match="Acesso negado"):
+        folder_manager.inventariar_pasta(
+            origem, destino, "criptografar"
+        )
+
+
+def test_rejeita_raiz_de_unidade_como_origem(tmp_path):
+    from pathlib import Path
+
+    raiz = Path(Path.cwd().anchor)
+    destino = tmp_path / "destino"
+
+    with pytest.raises(ValueError, match="raiz de uma unidade"):
+        inventariar_pasta(
+            raiz, destino, "criptografar"
+        )
+
+
+def test_rejeita_raiz_de_unidade_como_destino(tmp_path):
+    from pathlib import Path
+
+    origem = tmp_path / "origem"
+    origem.mkdir()
+    destino = Path(Path.cwd().anchor)
+
+    with pytest.raises(ValueError, match="raiz de uma unidade"):
+        inventariar_pasta(
+            origem, destino, "criptografar"
+        )
+
+
+def test_nao_sobrescreve_destino_criado_apos_inventario(
+    tmp_path, monkeypatch
+):
+    import folder_manager
+    from file_crypto import criptografar_arquivo as criptografar_original
+
+    origem = tmp_path / "origem"
+    destino = tmp_path / "destino"
+    origem.mkdir()
+
+    arquivo_origem = origem / "documento.txt"
+    arquivo_origem.write_text("Conteudo original", encoding="utf-8")
+
+    arquivo_destino = destino / "documento.txt.pld"
+    conteudo_existente = "NAO ALTERAR ESTE CONTEUDO"
+
+    def criar_conflito_antes_de_criptografar(
+        caminho_origem, caminho_destino, senha
+    ):
+        arquivo_destino.parent.mkdir(parents=True, exist_ok=True)
+        arquivo_destino.write_text(
+            conteudo_existente, encoding="utf-8"
+        )
+
+        criptografar_original(
+            caminho_origem, caminho_destino, senha
+        )
+
+    monkeypatch.setattr(
+        folder_manager,
+        "criptografar_arquivo",
+        criar_conflito_antes_de_criptografar,
+    )
+
+    resultados = folder_manager.processar_pasta(
+        origem, destino, "senha-de-teste", "criptografar"
+    )
+
+    assert arquivo_destino.read_text(encoding="utf-8") == conteudo_existente
+    assert resultados[0]["status"] == "conflito"
+    assert "já existe" in resultados[0]["mensagem"]
