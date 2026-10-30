@@ -43,6 +43,68 @@ def test_arquivo_vazio(tmp_path):
     assert recuperado.read_bytes() == b""
 
 
+def test_progresso_da_criptografia_corresponde_ao_original(tmp_path):
+    original = tmp_path / "original.txt"
+    cifrado = tmp_path / "original.pld"
+
+    conteudo = b"Conteudo para acompanhar o progresso " * 10000
+    original.write_bytes(conteudo)
+
+    incrementos = []
+
+    criptografar_arquivo(
+        original,
+        cifrado,
+        SENHA,
+        progresso=incrementos.append,
+    )
+
+    assert sum(incrementos) == original.stat().st_size
+    assert all(valor > 0 for valor in incrementos)
+
+
+def test_progresso_da_descriptografia_corresponde_ao_cifrado(tmp_path):
+    original = tmp_path / "original.txt"
+    cifrado = tmp_path / "original.pld"
+    recuperado = tmp_path / "recuperado.txt"
+
+    original.write_bytes(b"Conteudo para acompanhar o progresso " * 10000)
+    criptografar_arquivo(original, cifrado, SENHA)
+
+    incrementos = []
+
+    descriptografar_arquivo(
+        cifrado,
+        recuperado,
+        SENHA,
+        progresso=incrementos.append,
+    )
+
+    assert sum(incrementos) == cifrado.stat().st_size
+    assert all(valor > 0 for valor in incrementos)
+
+
+def test_progresso_da_descriptografia_de_arquivo_vazio(tmp_path):
+    original = tmp_path / "vazio.bin"
+    cifrado = tmp_path / "vazio.pld"
+    recuperado = tmp_path / "recuperado.bin"
+
+    original.write_bytes(b"")
+    criptografar_arquivo(original, cifrado, SENHA)
+
+    incrementos = []
+
+    descriptografar_arquivo(
+        cifrado,
+        recuperado,
+        SENHA,
+        progresso=incrementos.append,
+    )
+
+    assert sum(incrementos) == cifrado.stat().st_size
+    assert recuperado.read_bytes() == b""
+
+
 def test_senha_incorreta_nao_publica_destino(tmp_path):
     original = tmp_path / "original.txt"
     cifrado = tmp_path / "original.pld"

@@ -99,6 +99,7 @@ def criptografar_arquivo(
     origem,
     destino,
     senha: str,
+    progresso=None,
 ) -> None:
     origem, destino = _preparar_caminhos(origem, destino)
 
@@ -149,6 +150,9 @@ def criptografar_arquivo(
 
                 saida.write(cifrado)
 
+                if progresso is not None:
+                    progresso(tamanho_bloco)
+
             if entrada.read(1):
                 raise ValueError(
                     "O arquivo de origem mudou durante a leitura."
@@ -180,6 +184,7 @@ def descriptografar_arquivo(
     origem,
     destino,
     senha: str,
+    progresso=None,
 ) -> None:
     origem, destino = _preparar_caminhos(origem, destino)
     temporario = _criar_temporario(destino)
@@ -187,6 +192,9 @@ def descriptografar_arquivo(
     try:
         with origem.open("rb") as entrada:
             cabecalho = _ler_exatamente(entrada, HEADER.size)
+
+            if progresso is not None:
+                progresso(HEADER.size)
 
             (
                 magic,
@@ -254,7 +262,13 @@ def descriptografar_arquivo(
                     saida.write(bloco)
                     total_recuperado += len(bloco)
 
+                    if progresso is not None:
+                        progresso(len(cifrado))
+
                 final = _ler_exatamente(entrada, TAG_SIZE)
+
+                if progresso is not None:
+                    progresso(TAG_SIZE)
 
                 aad_final = cabecalho + b"END" + struct.pack(
                     ">I", quantidade_blocos

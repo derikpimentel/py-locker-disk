@@ -170,7 +170,7 @@ def test_nao_sobrescreve_destino_criado_apos_inventario(
     conteudo_existente = "NAO ALTERAR ESTE CONTEUDO"
 
     def criar_conflito_antes_de_criptografar(
-        caminho_origem, caminho_destino, senha
+        caminho_origem, caminho_destino, senha, progresso=None
     ):
         arquivo_destino.parent.mkdir(parents=True, exist_ok=True)
         arquivo_destino.write_text(
@@ -178,7 +178,7 @@ def test_nao_sobrescreve_destino_criado_apos_inventario(
         )
 
         criptografar_original(
-            caminho_origem, caminho_destino, senha
+            caminho_origem, caminho_destino, senha, progresso=progresso,
         )
 
     monkeypatch.setattr(
@@ -194,3 +194,101 @@ def test_nao_sobrescreve_destino_criado_apos_inventario(
     assert arquivo_destino.read_text(encoding="utf-8") == conteudo_existente
     assert resultados[0]["status"] == "conflito"
     assert "já existe" in resultados[0]["mensagem"]
+
+
+def test_progresso_da_criptografia_de_pasta(tmp_path):
+    origem = tmp_path / "origem"
+    destino = tmp_path / "destino"
+    origem.mkdir()
+
+    arquivo = origem / "documento.txt"
+    arquivo.write_bytes(b"Conteudo para testar o progresso " * 100)
+
+    # Deve ser contabilizado, mas ignorado na criptografia.
+    (origem / "ja_cifrado.pld").write_bytes(b"Arquivo ignorado")
+
+    eventos = []
+
+    resultados = processar_pasta(
+        origem,
+        destino,
+        SENHA,
+        "criptografar",
+        progresso=lambda atual, total, nome: eventos.append(
+            (atual, total, nome)
+        ),
+    )
+
+    assert resultados[0]["status"] == "sucesso"
+    assert resultados[1]["status"] == "ignorado"
+
+    valores = [evento[0] for evento in eventos]
+    totais = [evento[1] for evento in eventos]
+
+    assert valores == sorted(valores)
+    assert all(0 <= atual <= total for atual, total, _ in eventos)
+    assert len(set(totais)) == 1
+    assert eventos[0] == (0, totais[0], None)
+    assert valores[-1] == totais[0]
+
+
+def test_progresso_da_descriptografia_de_pasta(tmp_path):
+    from file_crypto import criptografar_arquivo
+
+    origem = tmp_path / "origem"
+    destino = tmp_path / "destino"
+    origem.mkdir()
+
+    fonte = tmp_path / "documento.txt"
+    fonte.write_bytes(b"Conteudo para testar a recuperacao " * 100)
+
+    cifrado = origem / "documento.txt.pld"
+    criptografar_arquivo(fonte, cifrado, SENHA)
+
+    # Deve ser ignorado na descriptografia.
+    (origem / "outro_arquivo.txt").write_bytes(b"Arquivo ignorado")
+
+    eventos = []
+
+    resultados = processar_pasta(
+        origem,
+        destino,
+        SENHA,
+        "descriptografar",
+        progresso=lambda atual, total, nome: eventos.append(
+            (atual, total, nome)
+        ),
+    )
+
+    assert resultados[0]["status"] == "sucesso"
+    assert resultados[1]["status"] == "ignorado"
+
+    valores = [evento[0] for evento in eventos]
+    totais = [evento[1] for evento in eventos]
+
+    assert valores == sorted(valores)
+    assert all(0 <= atual <= total for atual, total, _ in eventos)
+    assert len(set(totais)) == 1
+    assert eventos[0] == (0, totais[0], None)
+    assert valores[-1] == totais[0]
+
+
+def test_progresso_de_pasta_vazia(tmp_path):
+    origem = tmp_path / "origem"
+    destino = tmp_path / "destino"
+    origem.mkdir()
+
+    eventos = []
+
+    resultados = processar_pasta(
+        origem,
+        destino,
+        SENHA,
+        "criptografar",
+        progresso=lambda atual, total, nome: eventos.append(
+            (atual, total, nome)
+        ),
+    )
+
+    assert resultados == []
+    assert eventos == [(0, 0, None)]

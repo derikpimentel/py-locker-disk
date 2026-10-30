@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 from file_crypto import criptografar_arquivo, descriptografar_arquivo
@@ -124,19 +125,96 @@ def inventariar_pasta(origem, destino, operacao):
                 "mensagem": mensagem,
             })
 
+    for item in inventario:
+        try:
+            arquivo = Path(item["origem"])
+
+            if arquivo.is_symlink() or not arquivo.is_file():
+                tamanho_bytes = 0
+                peso = 1
+            else:
+                tamanho_bytes = arquivo.stat().st_size
+                peso = max(tamanho_bytes, 1)
+
+        except OSError:
+            tamanho_bytes = 0
+            peso = 1
+
+        item["_peso_progresso"] = peso
+        item["_tamanho_bytes"] = tamanho_bytes
+
     return inventario
 
 
-def processar_pasta(origem, destino, senha, operacao):
+def processar_pasta(
+    origem,
+    destino,
+    senha,
+    operacao,
+    progresso=None,
+    progresso_arquivos=None,
+):
     inventario = inventariar_pasta(origem, destino, operacao)
     resultados = []
 
-    for item in inventario:
+    total = sum(item["_peso_progresso"] for item in inventario)
+    processados = 0
+    total_arquivos = len(inventario)
+    arquivos_concluidos = 0
+
+    def notificar_progresso(arquivo=None):
+        if progresso is not None:
+            progresso(processados, total, arquivo)
+
+    def notificar_arquivo(resultado=None):
+        if progresso_arquivos is not None:
+            progresso_arquivos(
+                arquivos_concluidos,
+                total_arquivos,
+                resultado,
+            )
+
+    # Informa os totais antes de iniciar o processamento.
+    notificar_progresso()
+    notificar_arquivo()
+
+    origem_resolvida = Path(origem).resolve(strict=True)
+
+    for indice, item in enumerate(inventario, start=1):
         resultado = item.copy()
 
+        resultado["indice_arquivo"] = indice
+        resultado["total_arquivos"] = total_arquivos
+        resultado["caminho_relativo"] = str(
+            Path(item["origem"]).relative_to(origem_resolvida)
+        )
+        resultado["tamanho_bytes"] = item["_tamanho_bytes"]
+        peso = item["_peso_progresso"]
+        inicio_arquivo = time.perf_counter()
+        bytes_item = 0
+
         if item["status"] != "pronto":
+            processados += peso
+            resultado["duracao_segundos"] = None
             resultados.append(resultado)
+
+            arquivos_concluidos += 1
+            notificar_progresso(item["origem"])
+            notificar_arquivo(resultado)
+
             continue
+
+        def atualizar_bytes(delta):
+            nonlocal bytes_item, processados
+
+            incremento = max(
+                0,
+                min(int(delta), peso - bytes_item),
+            )
+
+            bytes_item += incremento
+            processados += incremento
+            notificar_progresso(item["origem"])
 
         try:
             item["destino"].parent.mkdir(
@@ -149,12 +227,14 @@ def processar_pasta(origem, destino, senha, operacao):
                     item["origem"],
                     item["destino"],
                     senha,
+                    progresso=atualizar_bytes,
                 )
             else:
                 descriptografar_arquivo(
                     item["origem"],
                     item["destino"],
                     senha,
+                    progresso=atualizar_bytes,
                 )
 
             resultado["status"] = "sucesso"
@@ -168,6 +248,19 @@ def processar_pasta(origem, destino, senha, operacao):
             resultado["status"] = "erro"
             resultado["mensagem"] = str(erro)
 
+        finally:
+            resultado["duracao_segundos"] = (
+                time.perf_counter() - inicio_arquivo
+            )
+
+            # Finaliza o peso do item, inclusive em caso de falha
+            # ou quando o arquivo está vazio.
+            processados += peso - bytes_item
+            notificar_progresso(item["origem"])
+
         resultados.append(resultado)
+
+        arquivos_concluidos += 1
+        notificar_arquivo(resultado)
 
     return resultados

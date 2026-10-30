@@ -1,4 +1,5 @@
 
+import time
 import queue
 import threading
 import tkinter as tk
@@ -24,6 +25,21 @@ class Aplicacao:
         self.senha_var = tk.StringVar()
         self.exibir_senha_var = tk.BooleanVar(value=False)
         self.status_var = tk.StringVar(value="Pronto para iniciar.")
+
+        self.progresso_var = tk.DoubleVar(value=0)
+        self.arquivos_var = tk.StringVar(
+            value="Arquivos: 0 de 0"
+        )
+        self.detalhes_progresso_var = tk.StringVar(
+            value="Aguardando operação."
+        )
+        self.tempo_decorrido_var = tk.StringVar(
+            value="Tempo decorrido: 00:00:00"
+        )
+        self.tempo_restante_var = tk.StringVar(
+            value="Tempo restante: --:--:--"
+        )
+        self.inicio_operacao = None
 
         self._montar_interface()
         self.raiz.after(150, self._verificar_fila)
@@ -137,6 +153,44 @@ class Aplicacao:
             principal,
             textvariable=self.status_var,
         ).pack(anchor="w")
+
+        quadro_progresso = ttk.LabelFrame(
+            principal,
+            text="Progresso da operação",
+            padding=10,
+        )
+        quadro_progresso.pack(fill="x", pady=8)
+
+        self.barra_progresso = ttk.Progressbar(
+            quadro_progresso,
+            variable=self.progresso_var,
+            maximum=100,
+            mode="determinate",
+        )
+        self.barra_progresso.pack(fill="x", pady=(0, 6))
+
+        ttk.Label(
+            quadro_progresso,
+            textvariable=self.detalhes_progresso_var,
+        ).pack(anchor="w")
+
+        ttk.Label(
+            quadro_progresso,
+            textvariable=self.arquivos_var,
+        ).pack(anchor="w", pady=(4, 0))
+
+        quadro_tempos = ttk.Frame(quadro_progresso)
+        quadro_tempos.pack(fill="x", pady=(6, 0))
+
+        ttk.Label(
+            quadro_tempos,
+            textvariable=self.tempo_decorrido_var,
+        ).pack(side="left")
+
+        ttk.Label(
+            quadro_tempos,
+            textvariable=self.tempo_restante_var,
+        ).pack(side="right")
 
         ttk.Label(
             principal,
@@ -301,6 +355,20 @@ class Aplicacao:
 
         self.processando = True
         self.botao_iniciar.configure(state="disabled")
+
+        self.inicio_operacao = time.perf_counter()
+        self.progresso_var.set(0)
+        self.arquivos_var.set("Arquivos: 0 de 0")
+        self.detalhes_progresso_var.set(
+            "Preparando processamento..."
+        )
+        self.tempo_decorrido_var.set(
+            "Tempo decorrido: 00:00:00"
+        )
+        self.tempo_restante_var.set(
+            "Tempo restante: calculando..."
+        )
+
         self.status_var.set("Processando arquivos...")
         self._adicionar_relatorio(
             f"\nIniciando: {operacao} — origem: {origem}"
@@ -314,27 +382,154 @@ class Aplicacao:
 
     def _executar_operacao(self, origem, destino, senha, operacao):
         try:
+            def informar_progresso(atual, total, arquivo):
+                self.fila.put(
+                    ("progresso", (atual, total, arquivo))
+                )
+
+            def informar_progresso_arquivos(
+                atual,
+                total,
+                resultado,
+            ):
+                self.fila.put(
+                    ("arquivos", (atual, total, resultado))
+                )
+
             resultados = processar_pasta(
-                origem, destino, senha, operacao
+                origem,
+                destino,
+                senha,
+                operacao,
+                progresso=informar_progresso,
+                progresso_arquivos=informar_progresso_arquivos,
             )
+
             self.fila.put(("sucesso", resultados))
+
         except Exception as erro:
             self.fila.put(("erro", str(erro)))
+
+    def _formatar_tempo(self, segundos):
+        segundos = max(0, int(segundos))
+        horas, resto = divmod(segundos, 3600)
+        minutos, segundos = divmod(resto, 60)
+
+        return f"{horas:02d}:{minutos:02d}:{segundos:02d}"
+
+
+    def _formatar_tamanho(self, tamanho_bytes):
+        tamanho = float(tamanho_bytes)
+
+        if tamanho < 1024:
+            return f"{int(tamanho)} B"
+
+        for unidade in ("KB", "MB", "GB", "TB"):
+            tamanho /= 1024
+
+            if tamanho < 1024 or unidade == "TB":
+                return f"{tamanho:.2f} {unidade}"
+
 
     def _verificar_fila(self):
         try:
             while True:
                 tipo, dados = self.fila.get_nowait()
 
-                if tipo == "erro":
+                if tipo == "progresso":
+                    atual, total, arquivo = dados
+
+                    percentual = (
+                        atual / total * 100
+                        if total > 0
+                        else 100
+                    )
+
+                    self.progresso_var.set(percentual)
+
+                    self.detalhes_progresso_var.set(
+                        f"{percentual:.1f}% — "
+                        f"{atual:,} de {total:,} bytes".replace(",", ".")
+                        + (
+                            f" | {Path(arquivo).name}"
+                            if arquivo is not None
+                            else ""
+                        )
+                    )
+
+                    if self.inicio_operacao is not None:
+                        decorrido = (
+                            time.perf_counter() - self.inicio_operacao
+                        )
+
+                        self.tempo_decorrido_var.set(
+                            "Tempo decorrido: "
+                            + self._formatar_tempo(decorrido)
+                        )
+
+                        if atual > 0 and total > atual:
+                            restante = decorrido * (total - atual) / atual
+                            texto_restante = self._formatar_tempo(restante)
+                        elif atual >= total:
+                            texto_restante = "00:00:00"
+                        else:
+                            texto_restante = "Calculando..."
+
+                        self.tempo_restante_var.set(
+                            f"Tempo restante: {texto_restante}"
+                        )
+
+                elif tipo == "arquivos":
+                    atual, total, resultado = dados
+
+                    self.arquivos_var.set(
+                        f"Arquivos: {atual} de {total}"
+                    )
+
+                    if resultado is not None:
+                        status = resultado["status"]
+                        origem = Path(resultado["origem"])
+
+                        nome = origem.name
+                        caminho = resultado["caminho_relativo"]
+                        indice = resultado["indice_arquivo"]
+                        total_arquivos = resultado["total_arquivos"]
+                        tamanho = self._formatar_tamanho(
+                            resultado["tamanho_bytes"]
+                        )
+
+                        duracao = resultado.get("duracao_segundos")
+
+                        texto_duracao = (
+                            f"Duração: {duracao:.2f}s"
+                            if duracao is not None
+                            else "Duração: não disponível"
+                        )
+
+                        self._adicionar_relatorio(
+                            f"\n[{status.upper()}] "
+                            f"Arquivo {indice} de {total_arquivos}\n"
+                            f"Nome: {nome}\n"
+                            f"Caminho: {caminho}\n"
+                            f"Tamanho: {tamanho}\n"
+                            f"{texto_duracao}\n"
+                            f"Resultado: {resultado['mensagem']}\n"
+                            f"{'-' * 55}"
+                        )
+
+                elif tipo == "erro":
                     self.status_var.set("A operação não foi concluída.")
                     self._adicionar_relatorio(f"Erro geral: {dados}")
+
                     messagebox.showerror(
                         "Erro",
                         dados,
                         parent=self.raiz,
                     )
-                else:
+
+                    self._finalizar_operacao()
+
+                elif tipo == "sucesso":
                     contagens = {
                         "sucesso": 0,
                         "erro": 0,
@@ -347,11 +542,6 @@ class Aplicacao:
                         status = item["status"]
                         contagens[status] = contagens.get(status, 0) + 1
 
-                        self._adicionar_relatorio(
-                            f"[{status.upper()}] "
-                            f"{item['origem']} — {item['mensagem']}"
-                        )
-
                     self._adicionar_relatorio(
                         "Resumo: "
                         + ", ".join(
@@ -359,7 +549,31 @@ class Aplicacao:
                             for chave, valor in contagens.items()
                         )
                     )
+
+                    if self.inicio_operacao is not None:
+                        duracao_total = (
+                            time.perf_counter() - self.inicio_operacao
+                        )
+
+                        self._adicionar_relatorio(
+                            "Duração total: "
+                            f"{self._formatar_tempo(duracao_total)}"
+                        )
+
+                    self.progresso_var.set(100)
+                    self.tempo_restante_var.set(
+                        "Tempo restante: 00:00:00"
+                    )
+                    self.detalhes_progresso_var.set(
+                        "Processamento concluído."
+                    )
+
+                    self.arquivos_var.set(
+                        f"Arquivos: {len(dados)} de {len(dados)}"
+                    )
+
                     self.status_var.set("Operação finalizada.")
+
                     messagebox.showinfo(
                         "Operação finalizada",
                         f"Sucessos: {contagens['sucesso']}\n"
@@ -369,14 +583,18 @@ class Aplicacao:
                         parent=self.raiz,
                     )
 
-                self.processando = False
-                self.botao_iniciar.configure(state="normal")
-                self.senha_var.set("")
+                    self._finalizar_operacao()
 
         except queue.Empty:
             pass
 
         self.raiz.after(150, self._verificar_fila)
+
+    def _finalizar_operacao(self):
+        self.processando = False
+        self.botao_iniciar.configure(state="normal")
+        self.senha_var.set("")
+        self.inicio_operacao = None
 
     def _limpar(self):
         if self.processando:
